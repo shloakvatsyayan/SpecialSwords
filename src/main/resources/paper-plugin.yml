@@ -1,0 +1,6 @@
+name: SpecialSwords
+version: '1.0'
+main: org.bonkmc.specialSwords.SpecialSwords
+api-version: '1.21'
+authors: [ Pyro ]
+website: https://discord.gg/bonknetwork
