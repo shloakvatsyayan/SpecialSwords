@@ -1,47 +1,96 @@
 package org.bonkmc.specialSwords;
 
-import org.bukkit.NamespacedKey;
+import io.papermc.paper.datacomponent.DataComponentTypes;
+import net.kyori.adventure.key.Key;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.*;
 import org.bukkit.enchantments.Enchantment;
-import org.bukkit.Material;
 import org.bukkit.entity.Player;
-import org.bukkit.event.Listener;
 import org.bukkit.event.EventHandler;
-import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerItemHeldEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.Vector;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.UUID;
+import java.util.*;
 
 public class SpecialSwords extends JavaPlugin implements Listener {
+    private static final Key SMASHER_MODEL = Key.key("special", "smasher");
+    private static final Key LIFTED_MODEL  = Key.key("special", "lifted_smasher");
 
-    // ← change these to match your resource-pack's CustomModelData values
-    private static final int SMASHER_MODEL_DATA        = /* e.g. */ 1001;
-    private static final int LIFTED_SMASHER_MODEL_DATA = /* e.g. */ 1002;
+    private static final long COOLDOWN_MS = 15_000;
 
-    // ← how long (in seconds) before they can do the triple-right-click again
-    private static final long COOLDOWN_SECONDS = 15;
-
-    // time window to collect three clicks (in ticks; 20 ticks = 1s)
-    private static final long CLICK_RESET_TICKS = 40; // 2 seconds
-
-    private final Map<UUID, Integer> clickCount     = new HashMap<>();
-    private final Map<UUID, Long>    lastUseTime    = new HashMap<>();
-    private final Set<UUID>          awaitingLeftClick = new HashSet<>();
+    private final Map<UUID, Long> lastUseTime = new HashMap<>();
+    private final Map<UUID, Deque<Long>> clickTimes = new HashMap<>();
+    private final Set<UUID> awaitingLeft = new HashSet<>();
+    private final Map<UUID, Integer> rechargeDots = new HashMap<>();
 
     @Override
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("SpecialSwords enabled!");
+
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                for (World world : getServer().getWorlds()) {
+                    for (org.bukkit.entity.Item dropped : world.getEntitiesByClass(org.bukkit.entity.Item.class)) {
+                        ItemStack stack = dropped.getItemStack();
+                        if (stack != null
+                                && stack.getType() == Material.MACE
+                                && stack.hasData(DataComponentTypes.ITEM_MODEL)
+                                && LIFTED_MODEL.equals(stack.getData(DataComponentTypes.ITEM_MODEL))) {
+                            dropped.remove();
+                        }
+                    }
+                }
+            }
+        }.runTaskTimer(this, 0L, 2L);
+
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                long now = System.currentTimeMillis();
+                for (Player p : getServer().getOnlinePlayers()) {
+                    UUID id = p.getUniqueId();
+                    ItemStack hand = p.getInventory().getItemInMainHand();
+                    boolean holdingSmasher = hand.hasData(DataComponentTypes.ITEM_MODEL)
+                            && SMASHER_MODEL.equals(hand.getData(DataComponentTypes.ITEM_MODEL));
+
+                    if (holdingSmasher) {
+                        boolean cooling = lastUseTime.containsKey(id)
+                                && now - lastUseTime.get(id) < COOLDOWN_MS;
+
+                        if (cooling) {
+                            int state = rechargeDots.getOrDefault(id, 0);
+                            state = (state + 1) % 3;
+                            rechargeDots.put(id, state);
+                            String dots = new String(new char[state + 1]).replace('\0', '.');
+
+                            p.sendActionBar(Component.text("Recharging" + dots)
+                                    .color(NamedTextColor.RED));
+                        } else {
+                            p.sendActionBar(Component.text("Right click three times to use SMASH attack")
+                                    .color(NamedTextColor.GREEN));
+                            rechargeDots.remove(id);
+                        }
+                    } else {
+                        rechargeDots.remove(id);
+                    }
+                }
+            }
+        }.runTaskTimer(this, 0L, 10L);
     }
 
     @Override
@@ -50,119 +99,145 @@ public class SpecialSwords extends JavaPlugin implements Listener {
     }
 
     @EventHandler
-    public void onRightClick(PlayerInteractEvent event) {
-        // only main-hand right clicks
-        if (event.getHand() != EquipmentSlot.HAND) return;
-        Action a = event.getAction();
-        if (a != Action.RIGHT_CLICK_AIR && a != Action.RIGHT_CLICK_BLOCK) return;
+    public void onRightClick(PlayerInteractEvent ev) {
+        if (ev.getHand() != EquipmentSlot.HAND) return;
+        Action act = ev.getAction();
+        if (act != Action.RIGHT_CLICK_AIR && act != Action.RIGHT_CLICK_BLOCK) return;
 
-        Player p = event.getPlayer();
-        // off-hand must be empty
+        Player p = ev.getPlayer();
+        UUID id = p.getUniqueId();
+
+        if (awaitingLeft.contains(id)) return;
         if (p.getInventory().getItemInOffHand().getType() != Material.AIR) return;
 
-        ItemStack inHand = p.getInventory().getItemInMainHand();
-        if (inHand == null || inHand.getType() != Material.NETHERITE_SWORD) return;
-        ItemMeta m = inHand.getItemMeta();
-        if (m == null || !m.hasCustomModelData() || m.getCustomModelData() != SMASHER_MODEL_DATA) return;
+        ItemStack hand = p.getInventory().getItemInMainHand();
+        if (!hand.hasData(DataComponentTypes.ITEM_MODEL)) return;
+        if (!SMASHER_MODEL.equals(hand.getData(DataComponentTypes.ITEM_MODEL))) return;
 
-        UUID id = p.getUniqueId();
         long now = System.currentTimeMillis();
-        if (lastUseTime.containsKey(id) && now - lastUseTime.get(id) < COOLDOWN_SECONDS * 1000) {
-            return; // still cooling down
+        if (lastUseTime.containsKey(id) && now - lastUseTime.get(id) < COOLDOWN_MS) return;
+
+        Deque<Long> times = clickTimes.computeIfAbsent(id, k -> new ArrayDeque<>());
+        times.addLast(now);
+        while (!times.isEmpty() && now - times.peekFirst() > 1_500) {
+            times.removeFirst();
         }
 
-        // count clicks
-        int cnt = clickCount.getOrDefault(id, 0) + 1;
-        clickCount.put(id, cnt);
-        // reset counter after CLICK_RESET_TICKS
-        new BukkitRunnable() {
-            @Override public void run() {
-                clickCount.remove(id);
-            }
-        }.runTaskLater(this, CLICK_RESET_TICKS);
+        int count = times.size();
+        float pitch = 1.0f + (count - 1) * 0.5f;
+        p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, pitch);
 
-        if (cnt == 3) {
-            // perform the special move
-            clickCount.remove(id);
+        if (count >= 3) {
+            times.clear();
             lastUseTime.put(id, now);
 
-            // 1) swap to the "lifted_smasher" mace
             int slot = p.getInventory().getHeldItemSlot();
             p.getInventory().setItem(slot, createLiftedMace());
 
-            // 2) launch them upward
+            Location loc = p.getLocation().add(0, 1, 0);
+            p.getWorld().spawnParticle(Particle.CLOUD, loc, 20, 0.5, 0.5, 0.5, 0.02);
+            p.getWorld().spawnParticle(Particle.FLAME, loc, 10, 0.3, 0.3, 0.3, 0.02);
+
             p.setVelocity(new Vector(0, 2.5, 0));
 
-            // wait for their next left-click
-            awaitingLeftClick.add(id);
+            awaitingLeft.add(id);
         }
     }
 
     @EventHandler
-    public void onLeftClick(PlayerInteractEvent event) {
-        // only main-hand left clicks
-        if (event.getHand() != EquipmentSlot.HAND) return;
-        Action a = event.getAction();
-        if (a != Action.LEFT_CLICK_AIR && a != Action.LEFT_CLICK_BLOCK) return;
+    public void onLeftClick(PlayerInteractEvent ev) {
+        if (ev.getHand() != EquipmentSlot.HAND) return;
+        Action act = ev.getAction();
+        if (act != Action.LEFT_CLICK_AIR && act != Action.LEFT_CLICK_BLOCK) return;
 
-        Player p = event.getPlayer();
+        Player p = ev.getPlayer();
         UUID id = p.getUniqueId();
-        if (!awaitingLeftClick.remove(id)) return;
+        if (!awaitingLeft.contains(id)) return;
 
-        // must still be holding the lifted mace
-        ItemStack inHand = p.getInventory().getItemInMainHand();
-        if (inHand == null || inHand.getType() != Material.NETHERITE_SWORD) return;
-        ItemMeta m = inHand.getItemMeta();
-        if (m == null || !m.hasCustomModelData() || m.getCustomModelData() != LIFTED_SMASHER_MODEL_DATA) {
-            return;
+        ItemStack hand = p.getInventory().getItemInMainHand();
+        if (!hand.hasData(DataComponentTypes.ITEM_MODEL)) return;
+        if (!LIFTED_MODEL.equals(hand.getData(DataComponentTypes.ITEM_MODEL))) return;
+
+        if (act == Action.LEFT_CLICK_AIR) {
+            double groundY = p.getWorld().getHighestBlockYAt(p.getLocation());
+            if (p.getLocation().getY() - groundY > 2.0) {
+                Vector forward = p.getLocation().getDirection().normalize().multiply(1.5);
+                p.setVelocity(forward);
+                triggerSlam(p, id);
+                return;
+            }
         }
 
-        // wait 1.5 seconds (30 ticks), then clear all mace items and give back the sword
+        triggerSlam(p, id);
+    }
+
+    @EventHandler
+    public void onPlayerMove(PlayerMoveEvent ev) {
+        Player p = ev.getPlayer();
+        UUID id = p.getUniqueId();
+        if (!awaitingLeft.contains(id)) return;
+
+        if (p.isOnGround() && p.getFallDistance() > 0) {
+            triggerSlam(p, id);
+        }
+    }
+
+    @EventHandler
+    public void onItemHeld(PlayerItemHeldEvent ev) {
+        if (awaitingLeft.contains(ev.getPlayer().getUniqueId())) {
+            ev.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onItemDrop(PlayerDropItemEvent ev) {
+        ItemStack dropped = ev.getItemDrop().getItemStack();
+        if (dropped.hasData(DataComponentTypes.ITEM_MODEL)
+                && LIFTED_MODEL.equals(dropped.getData(DataComponentTypes.ITEM_MODEL))) {
+            ev.setCancelled(true);
+        }
+    }
+
+    private void triggerSlam(Player p, UUID id) {
+        awaitingLeft.remove(id);
+
         new BukkitRunnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 PlayerInventory inv = p.getInventory();
-                // clear every lifted_smasher in their inventory
                 for (int i = 0; i < inv.getSize(); i++) {
                     ItemStack stack = inv.getItem(i);
-                    if (stack != null && stack.getType() == Material.NETHERITE_SWORD) {
-                        ItemMeta mm = stack.getItemMeta();
-                        if (mm != null
-                                && mm.hasCustomModelData()
-                                && mm.getCustomModelData() == LIFTED_SMASHER_MODEL_DATA) {
-                            inv.clear(i);
-                        }
+                    if (stack != null
+                            && stack.getType() == Material.MACE
+                            && stack.hasData(DataComponentTypes.ITEM_MODEL)
+                            && LIFTED_MODEL.equals(stack.getData(DataComponentTypes.ITEM_MODEL)))
+                    {
+                        inv.clear(i);
                     }
                 }
-                // put the original sword back in their current hand slot
-                int slot = p.getInventory().getHeldItemSlot();
-                inv.setItem(slot, createSmasher());
+                inv.setItem(inv.getHeldItemSlot(), createSmasher());
             }
-        }.runTaskLater(this, 30);
+        }.runTaskLater(this, 6);
     }
 
     private ItemStack createSmasher() {
-        ItemStack sword = new ItemStack(Material.NETHERITE_SWORD);
-        ItemMeta m = sword.getItemMeta();
-        m.setCustomModelData(SMASHER_MODEL_DATA);
-        sword.setItemMeta(m);
+        ItemStack sword = ItemStack.of(Material.NETHERITE_SWORD);
+        sword.setData(DataComponentTypes.ITEM_MODEL, SMASHER_MODEL);
         return sword;
     }
 
     private ItemStack createLiftedMace() {
-        ItemStack mace = new ItemStack(Material.NETHERITE_SWORD);
-        ItemMeta m = mace.getItemMeta();
-        m.setCustomModelData(LIFTED_SMASHER_MODEL_DATA);
+        ItemStack mace = ItemStack.of(Material.MACE);
+        mace.setData(DataComponentTypes.ITEM_MODEL, LIFTED_MODEL);
 
-        // apply your custom enchants (must be registered elsewhere)
-        Enchantment density   = Enchantment.getByKey(new NamespacedKey(this, "density"));
-        Enchantment breach    = Enchantment.getByKey(new NamespacedKey(this, "breach"));
-        Enchantment windburst = Enchantment.getByKey(new NamespacedKey(this, "windburst"));
+        ItemMeta meta = mace.getItemMeta();
+        if (meta != null) {
+            meta.addEnchant(Enchantment.DENSITY, 8, true);
+            meta.addEnchant(Enchantment.BREACH, 5, true);
+            meta.addItemFlags(ItemFlag.HIDE_ENCHANTS, ItemFlag.HIDE_ATTRIBUTES);
 
-        if (density   != null) m.addEnchant(density,   5, true);
-        if (breach    != null) m.addEnchant(breach,    5, true);
-        if (windburst != null) m.addEnchant(windburst, 4, true);
-
-        mace.setItemMeta(m);
+            mace.setItemMeta(meta);
+        }
         return mace;
     }
 }
