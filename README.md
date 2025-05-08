@@ -102,7 +102,3 @@ Found a bug or have a feature request? Open an issue or submit a pull request on
 [![BY](https://mirrors.creativecommons.org/presskit/icons/by.svg?ref=chooser-v1)](https://creativecommons.org/licenses/by-nc-sa/4.0/?ref=chooser-v1)
 [![NC](https://mirrors.creativecommons.org/presskit/icons/nc.svg?ref=chooser-v1)](https://creativecommons.org/licenses/by-nc-sa/4.0/?ref=chooser-v1)
 [![SA](https://mirrors.creativecommons.org/presskit/icons/sa.svg?ref=chooser-v1)](https://creativecommons.org/licenses/by-nc-sa/4.0/?ref=chooser-v1)
-
-
-```
-```
