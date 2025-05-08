@@ -1,46 +1,80 @@
 package org.bonkmc.specialSwords;
 
 import io.papermc.paper.datacomponent.DataComponentTypes;
+import io.papermc.paper.command.brigadier.Commands;
+import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
+import com.mojang.brigadier.Command;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.*;
+import org.bukkit.command.CommandSender;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
-import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerItemHeldEvent;
-import org.bukkit.event.player.PlayerMoveEvent;
-import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.*;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.inventory.ItemFlag;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.Vector;
 
 import java.util.*;
 
+/**
+ * SpecialSwords plugin—now registering /specialswords via Paper’s Brigadier API.
+ */
 public class SpecialSwords extends JavaPlugin implements Listener {
     private static final Key SMASHER_MODEL = Key.key("special", "smasher");
     private static final Key LIFTED_MODEL  = Key.key("special", "lifted_smasher");
+    private static final long COOLDOWN_MS = 60_000;
 
-    private static final long COOLDOWN_MS = 15_000;
-
-    private final Map<UUID, Long> lastUseTime = new HashMap<>();
-    private final Map<UUID, Deque<Long>> clickTimes = new HashMap<>();
-    private final Set<UUID> awaitingLeft = new HashSet<>();
-    private final Map<UUID, Integer> rechargeDots = new HashMap<>();
+    private final Map<UUID, Long> lastUseTime         = new HashMap<>();
+    private final Map<UUID, Deque<Long>> clickTimes   = new HashMap<>();
+    private final Set<UUID> awaitingLeft              = new HashSet<>();
+    private final Map<UUID, Integer> rechargeDots     = new HashMap<>();
 
     @Override
     public void onEnable() {
+        // Register event listeners
         getServer().getPluginManager().registerEvents(this, this);
+
+        // Register our /specialswords command via Paper’s Brigadier API
+        LifecycleEventManager<Plugin> lifecycleManager = this.getLifecycleManager();
+        lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS, event -> {
+            var commands = event.registrar();
+            commands.register(
+                    Commands.literal("specialswords")
+                            .then(Commands.literal("give")
+                                    .then(Commands.literal("smasher")
+                                            .executes(ctx -> {
+                                                CommandSender sender = ctx.getSource().getSender();
+                                                if (!(sender instanceof Player)) {
+                                                    sender.sendMessage(ChatColor.RED + "Only players can use that.");
+                                                } else {
+                                                    Player p = (Player) sender;
+                                                    p.getInventory().addItem(createSmasher());
+                                                }
+                                                return Command.SINGLE_SUCCESS;
+                                            })
+                                    )
+                            )
+                            .build(),
+                    "Give a SMASHER sword",
+                    List.of() // no aliases
+            );
+        });
         getLogger().info("SpecialSwords enabled!");
 
+        // Clean up any dropped “lifted mace” entities every tick
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -58,6 +92,7 @@ public class SpecialSwords extends JavaPlugin implements Listener {
             }
         }.runTaskTimer(this, 0L, 2L);
 
+        // Action-bar display for smasher cooldown / ready state
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -76,8 +111,7 @@ public class SpecialSwords extends JavaPlugin implements Listener {
                             int state = rechargeDots.getOrDefault(id, 0);
                             state = (state + 1) % 3;
                             rechargeDots.put(id, state);
-                            String dots = new String(new char[state + 1]).replace('\0', '.');
-
+                            String dots = ".".repeat(state + 1);
                             p.sendActionBar(Component.text("Recharging" + dots)
                                     .color(NamedTextColor.RED));
                         } else {
@@ -98,6 +132,7 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         getLogger().info("SpecialSwords disabled!");
     }
 
+    // RIGHT-click 3× → launch into lifted mace
     @EventHandler
     public void onRightClick(PlayerInteractEvent ev) {
         if (ev.getHand() != EquipmentSlot.HAND) return;
@@ -106,13 +141,12 @@ public class SpecialSwords extends JavaPlugin implements Listener {
 
         Player p = ev.getPlayer();
         UUID id = p.getUniqueId();
-
         if (awaitingLeft.contains(id)) return;
         if (p.getInventory().getItemInOffHand().getType() != Material.AIR) return;
 
         ItemStack hand = p.getInventory().getItemInMainHand();
-        if (!hand.hasData(DataComponentTypes.ITEM_MODEL)) return;
-        if (!SMASHER_MODEL.equals(hand.getData(DataComponentTypes.ITEM_MODEL))) return;
+        if (!hand.hasData(DataComponentTypes.ITEM_MODEL)
+                || !SMASHER_MODEL.equals(hand.getData(DataComponentTypes.ITEM_MODEL))) return;
 
         long now = System.currentTimeMillis();
         if (lastUseTime.containsKey(id) && now - lastUseTime.get(id) < COOLDOWN_MS) return;
@@ -139,38 +173,11 @@ public class SpecialSwords extends JavaPlugin implements Listener {
             p.getWorld().spawnParticle(Particle.FLAME, loc, 10, 0.3, 0.3, 0.3, 0.02);
 
             p.setVelocity(new Vector(0, 2.5, 0));
-
             awaitingLeft.add(id);
         }
     }
 
-    @EventHandler
-    public void onLeftClick(PlayerInteractEvent ev) {
-        if (ev.getHand() != EquipmentSlot.HAND) return;
-        Action act = ev.getAction();
-        if (act != Action.LEFT_CLICK_AIR && act != Action.LEFT_CLICK_BLOCK) return;
-
-        Player p = ev.getPlayer();
-        UUID id = p.getUniqueId();
-        if (!awaitingLeft.contains(id)) return;
-
-        ItemStack hand = p.getInventory().getItemInMainHand();
-        if (!hand.hasData(DataComponentTypes.ITEM_MODEL)) return;
-        if (!LIFTED_MODEL.equals(hand.getData(DataComponentTypes.ITEM_MODEL))) return;
-
-        if (act == Action.LEFT_CLICK_AIR) {
-            double groundY = p.getWorld().getHighestBlockYAt(p.getLocation());
-            if (p.getLocation().getY() - groundY > 2.0) {
-                Vector forward = p.getLocation().getDirection().normalize().multiply(1.5);
-                p.setVelocity(forward);
-                triggerSlam(p, id);
-                return;
-            }
-        }
-
-        triggerSlam(p, id);
-    }
-
+    // POST-LAUNCH: trigger slam on ground
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent ev) {
         Player p = ev.getPlayer();
@@ -182,13 +189,20 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         }
     }
 
+    // re-apply smasher meta when switching items
     @EventHandler
     public void onItemHeld(PlayerItemHeldEvent ev) {
-        if (awaitingLeft.contains(ev.getPlayer().getUniqueId())) {
-            ev.setCancelled(true);
+        ItemStack newItem = ev.getPlayer()
+                .getInventory()
+                .getItem(ev.getNewSlot());
+        if (newItem != null
+                && newItem.hasData(DataComponentTypes.ITEM_MODEL)
+                && SMASHER_MODEL.equals(newItem.getData(DataComponentTypes.ITEM_MODEL))) {
+            applySmasherMeta(newItem);
         }
     }
 
+    // prevent dropping the lifted mace
     @EventHandler
     public void onItemDrop(PlayerDropItemEvent ev) {
         ItemStack dropped = ev.getItemDrop().getItemStack();
@@ -217,25 +231,61 @@ public class SpecialSwords extends JavaPlugin implements Listener {
                 }
                 inv.setItem(inv.getHeldItemSlot(), createSmasher());
             }
-        }.runTaskLater(this, 6);
+        }.runTaskLater(this, 6L);
+    }
+
+    // Same NBT-packing logic as before
+    private void applySmasherMeta(ItemStack sword) {
+        if (sword == null) return;
+        sword.setData(DataComponentTypes.ITEM_MODEL, SMASHER_MODEL);
+        ItemMeta meta = sword.getItemMeta();
+        if (meta == null) return;
+
+        Component name = Component.empty()
+                .append(Component.text("aa")
+                        .color(NamedTextColor.BLACK)
+                        .decorate(TextDecoration.OBFUSCATED))
+                .append(Component.text("SMASHER")
+                        .color(NamedTextColor.RED)
+                        .decorate(TextDecoration.UNDERLINED)
+                        .decorate(TextDecoration.BOLD))
+                .append(Component.text("aa")
+                        .color(NamedTextColor.BLACK)
+                        .decorate(TextDecoration.OBFUSCATED));
+        meta.displayName(name);
+
+        meta.addEnchant(Enchantment.BANE_OF_ARTHROPODS, 5, true);
+        meta.addEnchant(Enchantment.FIRE_ASPECT,        3, true);
+        meta.addEnchant(Enchantment.LOOTING,            4, true);
+        meta.addEnchant(Enchantment.MENDING,            1, true);
+        meta.addEnchant(Enchantment.SHARPNESS,          5, true);
+        meta.addEnchant(Enchantment.SWEEPING_EDGE,      4, true);
+        meta.addEnchant(Enchantment.UNBREAKING,         3, true);
+        meta.addEnchant(Enchantment.VANISHING_CURSE,    1, true);
+
+        meta.setUnbreakable(true);
+        meta.addItemFlags(ItemFlag.HIDE_ENCHANTS,
+                ItemFlag.HIDE_UNBREAKABLE,
+                ItemFlag.HIDE_ATTRIBUTES);
+        sword.setItemMeta(meta);
     }
 
     private ItemStack createSmasher() {
-        ItemStack sword = ItemStack.of(Material.NETHERITE_SWORD);
-        sword.setData(DataComponentTypes.ITEM_MODEL, SMASHER_MODEL);
+        ItemStack sword = new ItemStack(Material.NETHERITE_SWORD);
+        applySmasherMeta(sword);
         return sword;
     }
 
     private ItemStack createLiftedMace() {
-        ItemStack mace = ItemStack.of(Material.MACE);
+        ItemStack mace = new ItemStack(Material.MACE);
         mace.setData(DataComponentTypes.ITEM_MODEL, LIFTED_MODEL);
 
         ItemMeta meta = mace.getItemMeta();
         if (meta != null) {
-            meta.addEnchant(Enchantment.DENSITY, 8, true);
-            meta.addEnchant(Enchantment.BREACH, 5, true);
+            meta.addEnchant(Enchantment.DENSITY,    8, true);
+            meta.addEnchant(Enchantment.BREACH,     5, true);
+            meta.addEnchant(Enchantment.WIND_BURST, 2, true);
             meta.addItemFlags(ItemFlag.HIDE_ENCHANTS, ItemFlag.HIDE_ATTRIBUTES);
-
             mace.setItemMeta(meta);
         }
         return mace;
