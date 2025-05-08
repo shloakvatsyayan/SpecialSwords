@@ -1,9 +1,11 @@
 Thought for 4 seconds
 
 # SpecialSwords
+## [Resource pack Recommended](https://github.com/bonknetwork/SpecialSwords-Resourcepack/releases/)
 
 **Version:** 1.2
 **Minecraft:** Paper 1.21.4+  
+**Authors:** Pyro from [BonkMC](https://bonkmc.net) - [Discord](https://discord.gg/bonknetwork)
 
 SpecialSwords is a lightweight Paper plugin that adds an over-powered, visually striking “SMASHER” sword to your server. It’s perfect for PvE arenas, adventure maps, or just chaotic fun with friends. With a few quick clicks, players can launch themselves sky-high, slam the ground with seismic force, and watch spectacular particle and sound effects unfold.
 
@@ -43,7 +45,10 @@ No special permissions are required by default.
 2. **Restart or Reload**
    Restart your server (recommended) or run `/reload` if necessary, however using `/reload` is HIGHLY discouraged.
 
-3. **Verify**
+3. **Install the Resource Pack (optional but suggested)**
+   Download the [SpecialSwords Resource Pack](https://github.com/bonknetwork/SpecialSwords-Resourcepack/releases/) and add it to your server.
+
+4. **Verify**
    Look for “SpecialSwords enabled!” in the console log to confirm successful loading.
 
 That’s all—no extra configuration files needed.
