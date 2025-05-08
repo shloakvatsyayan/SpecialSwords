@@ -1,5 +1,3 @@
-Thought for 4 seconds
-
 # SpecialSwords
 ## [Resource pack Recommended](https://github.com/bonknetwork/SpecialSwords-Resourcepack/releases/)
 
