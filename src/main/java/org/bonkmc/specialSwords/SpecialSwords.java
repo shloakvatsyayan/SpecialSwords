@@ -29,9 +29,7 @@ import org.bukkit.util.Vector;
 
 import java.util.*;
 
-/**
- * SpecialSwords plugin—now registering /specialswords via Paper’s Brigadier API.
- */
+
 public class SpecialSwords extends JavaPlugin implements Listener {
     private static final Key SMASHER_MODEL = Key.key("special", "smasher");
     private static final Key LIFTED_MODEL  = Key.key("special", "lifted_smasher");
@@ -44,10 +42,9 @@ public class SpecialSwords extends JavaPlugin implements Listener {
 
     @Override
     public void onEnable() {
-        // Register event listeners
         getServer().getPluginManager().registerEvents(this, this);
 
-        // Register our /specialswords command via Paper’s Brigadier API
+
         LifecycleEventManager<Plugin> lifecycleManager = this.getLifecycleManager();
         lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS, event -> {
             var commands = event.registrar();
@@ -69,12 +66,12 @@ public class SpecialSwords extends JavaPlugin implements Listener {
                             )
                             .build(),
                     "Give a SMASHER sword",
-                    List.of() // no aliases
+                    List.of()
             );
         });
         getLogger().info("SpecialSwords enabled!");
 
-        // Clean up any dropped “lifted mace” entities every tick
+
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -92,7 +89,7 @@ public class SpecialSwords extends JavaPlugin implements Listener {
             }
         }.runTaskTimer(this, 0L, 2L);
 
-        // Action-bar display for smasher cooldown / ready state
+
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -132,7 +129,7 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         getLogger().info("SpecialSwords disabled!");
     }
 
-    // RIGHT-click 3× → launch into lifted mace
+
     @EventHandler
     public void onRightClick(PlayerInteractEvent ev) {
         if (ev.getHand() != EquipmentSlot.HAND) return;
@@ -177,7 +174,6 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         }
     }
 
-    // POST-LAUNCH: trigger slam on ground
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent ev) {
         Player p = ev.getPlayer();
@@ -189,7 +185,6 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         }
     }
 
-    // re-apply smasher meta when switching items
     @EventHandler
     public void onItemHeld(PlayerItemHeldEvent ev) {
         ItemStack newItem = ev.getPlayer()
@@ -202,7 +197,6 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         }
     }
 
-    // prevent dropping the lifted mace
     @EventHandler
     public void onItemDrop(PlayerDropItemEvent ev) {
         ItemStack dropped = ev.getItemDrop().getItemStack();
@@ -234,7 +228,6 @@ public class SpecialSwords extends JavaPlugin implements Listener {
         }.runTaskLater(this, 6L);
     }
 
-    // Same NBT-packing logic as before
     private void applySmasherMeta(ItemStack sword) {
         if (sword == null) return;
         sword.setData(DataComponentTypes.ITEM_MODEL, SMASHER_MODEL);
